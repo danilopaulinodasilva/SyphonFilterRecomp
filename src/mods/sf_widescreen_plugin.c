@@ -1,5 +1,4 @@
 #include <stdio.h>
-#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -44,6 +43,8 @@ typedef struct { uint32_t packet; int x0, x1, y0, y1; } SfHudBox;
 static SfHudBox sf_sprites[SF_MAX_SPRITES];
 static int sf_sprite_count;
 static int sf_enabled;
+/* Developer aid: SF_WS_OFF=rooms,blocks,clip disables those world fixes. */
+static int sf_off_rooms, sf_off_blocks, sf_off_clip;
 static FILE* sf_hud_diag;
 
 static int s16(uint32_t v) { return (int)(int16_t)(v & 0xFFFFu); }
@@ -233,6 +234,14 @@ static void sf_widescreen_activate(void) {
         (void)psx_mod_set_fixed_display_aspect(16u, 9u);
     }
     sf_enabled = 1;
+    const char* off = getenv("SF_WS_OFF");
+    if (off) {
+        sf_off_rooms = strstr(off, "rooms") != NULL;
+        sf_off_blocks = strstr(off, "blocks") != NULL;
+        sf_off_clip = strstr(off, "clip") != NULL;
+    }
+    /* Room streaming needs room for the extra slots (sf_room_manager). */
+    (void)psx_mod_set_main_ram_8mb(1);
     /* Developer aid: SF_HUD_DIAG=<path> logs every classification decision. */
     const char* diag = getenv("SF_HUD_DIAG");
     if (diag && *diag && !sf_hud_diag) sf_hud_diag = fopen(diag, "w");
@@ -257,7 +266,6 @@ static void sf_widescreen_activate(void) {
 #define SF_PIECE_GUARD 32
 #define SF_MAX_PIECE_BLOCKS 256
 
-extern int psx_ws_x_margin(void);
 
 typedef struct { int32_t x, z; } SfCamPt;
 
@@ -319,14 +327,13 @@ static int32_t sf_block_far(void) {
 
 static void sf_world_block_test(struct CPUState* cpu, uint32_t address) {
     (void)address;
-    if (!sf_enabled || psx_ws_x_margin() <= 0) return;
+    if (!sf_enabled || sf_off_blocks || psx_mod_widescreen_x_margin() <= 0) return;
     const int32_t x0 = s16(cpu->gpr[20]), z0 = s16(cpu->gpr[21]);   /* s4, s5 */
     const int32_t x1 = s16(cpu->gpr[22]), z1 = s16(cpu->gpr[23]);   /* s6, s7 */
     const int32_t y = (int16_t)(cpu->gpr[15] >> 16);                  /* t7 */
     if (!sf_rect_visible(cpu, x0, z0, x1, z1, y, (int32_t)cpu->gpr[5] /* a1 */,
                          (int32_t)cpu->gpr[25] /* t9 */))
         return;
-    psx_mod_counter_add("sf.block_kept", 1);
     cpu->gte_data[17] = 1;   /* SZ1: in front, within the draw distance */
     cpu->gte_data[12] = 0;   /* SXY0: on the screen centre line */
 }
@@ -341,9 +348,8 @@ static void sf_world_block_test(struct CPUState* cpu, uint32_t address) {
  */
 static void sf_world_piece_test(struct CPUState* cpu, uint32_t address) {
     (void)address;
-    if (!sf_enabled || cpu->gpr[2] != 0) return;          /* v0: centre test result */
-    psx_mod_counter_add("sf.piece_rejected", 1);
-    const int margin = psx_ws_x_margin();
+    if (!sf_enabled || sf_off_blocks || cpu->gpr[2] != 0) return;          /* v0: centre test result */
+    const int margin = psx_mod_widescreen_x_margin();
     if (margin <= 0) return;
     const uint32_t piece = cpu->gpr[17];                     /* s1 */
     const uint32_t owner = cpu->gpr[18];                     /* s2 */
@@ -361,19 +367,188 @@ static void sf_world_piece_test(struct CPUState* cpu, uint32_t address) {
                             (int16_t)psx_mod_read_half(block + 0xCu),
                             (int16_t)psx_mod_read_half(block + 0xEu),
                             y_hi - ((y_hi - y_lo) >> 1), bound, far_z)) {
-            psx_mod_counter_add("sf.piece_rescued", 1);
             cpu->gpr[2] = 1;
             return;
         }
     }
 }
 
+/*
+ * World vertex clip flags (0x800D40A4). The block renderer marks each vertex
+ * whose |SX| exceeds a screen limit (H * 0xC0 / 0x26, kept at 0x1F8003A0) and
+ * later drops polygons by those marks: near walls at the wide edges vanished.
+ * Widen the limit by the wide margin when it is stored.
+ */
+#define SF_WORLD_CLIP_LIMIT 0x800D41F8u /* sw t2,0x3A0(v1): t2 = y limit << 16 | x limit */
+
+static void sf_world_clip_limit(struct CPUState* cpu, uint32_t address) {
+    (void)address;
+    if (!sf_enabled || sf_off_clip) return;
+    const int32_t margin = psx_mod_widescreen_x_margin();
+    if (margin <= 0) return;
+    const uint32_t t2 = cpu->gpr[10];
+    int32_t x = (int32_t)(t2 & 0xFFFFu) + margin;
+    if (x > 0x7FFF) x = 0x7FFF;
+    cpu->gpr[10] = (t2 & 0xFFFF0000u) | (uint32_t)x;
+}
+
+/*
+ * Room streaming. A level is split into rooms (world pieces) streamed from
+ * the disc into a fixed pool of slots (gp+0xE24 table of 0x14-byte entries,
+ * gp+0xCE8 slots of gp+0xD04 sectors each). Each room carries a precomputed
+ * list of the rooms visible from it (level data +0x90, 15 bytes per room:
+ * rooms to load, 0xFE, rooms to unload, 0xFF). The lists and the pool were
+ * sized for the 4:3 view; rooms the wide margins reveal are simply not loaded
+ * (black gaps at the screen edges). With widescreen on, the plugin runs the
+ * game in 8 MB RAM, gives the pool extra slots there and widens every room's
+ * list with the rooms its neighbours can see. Applied at the room manager's
+ * entry (0x80080930), never in the middle of the game's own table walks.
+ */
+#define SF_GP               0x80115C68u
+#define SF_ROOM_MANAGER     0x80080930u /* addiu sp,sp,-0x120 */
+#define SF_LEVEL_DATA       0x80116A60u
+#define SF_ROOM_LISTS       0x90u
+#define SF_ROOM_ROW         15
+#define SF_ROOM_LOAD_MAX    14          /* entries the manager reads per row */
+#define SF_MAX_ROOMS        160
+#define SF_EXT_TABLE        0x80200000u /* expanded RAM: never touched by the game */
+#define SF_EXT_POOL         0x80210000u
+#define SF_EXTRA_SLOTS      64
+#define SF_SLOT_ENTRY       0x14u
+
+extern uint32_t memory_get_ram_bytes(void);
+
+static uint32_t sf_rooms_level;                 /* level data the rows were widened for */
+static uint8_t  sf_rooms_orig[SF_MAX_ROOMS * SF_ROOM_ROW];
+static uint8_t  sf_rooms_wide[SF_MAX_ROOMS * SF_ROOM_ROW];
+
+static int sf_expanded_ram(void) { return memory_get_ram_bytes() > 0x200000u; }
+
+/* Appends the extra slots once per pool the game builds (it rebuilds the table
+ * at every level load). New slots are free: no owner, state 1. */
+static void sf_extend_slot_pool(void) {
+    const uint32_t table = psx_mod_read_word(SF_GP + 0xE24u);
+    const int32_t count = (int32_t)psx_mod_read_word(SF_GP + 0xCE8u);
+    const uint32_t slot_bytes = psx_mod_read_word(SF_GP + 0xD04u) * 2048u;
+    if (table == SF_EXT_TABLE || count <= 0 || count > 256 || !slot_bytes ||
+        slot_bytes > 0x10000u || (table & 0x1FFFFFFFu) >= 0x200000u)
+        return;
+    for (int32_t i = 0; i < count; i++)
+        for (uint32_t o = 0; o < SF_SLOT_ENTRY; o += 4u)
+            psx_mod_write_word(SF_EXT_TABLE + (uint32_t)i * SF_SLOT_ENTRY + o,
+                               psx_mod_read_word(table + (uint32_t)i * SF_SLOT_ENTRY + o));
+    for (uint32_t i = 0; i < SF_EXTRA_SLOTS; i++) {
+        const uint32_t e = SF_EXT_TABLE + ((uint32_t)count + i) * SF_SLOT_ENTRY;
+        psx_mod_write_word(e + 0x0u, SF_EXT_POOL + i * slot_bytes);
+        psx_mod_write_word(e + 0x4u, 0u);
+        psx_mod_write_word(e + 0x8u, 0u);
+        psx_mod_write_word(e + 0xCu, 0xFFFFFFFFu);
+        psx_mod_write_word(e + 0x10u, 1u);
+    }
+    psx_mod_write_word(SF_GP + 0xE24u, SF_EXT_TABLE);
+    psx_mod_write_word(SF_GP + 0xCE8u, (uint32_t)count + SF_EXTRA_SLOTS);
+    psx_mod_write_word(SF_GP + 0xD7Cu, psx_mod_read_word(SF_GP + 0xD7Cu) + SF_EXTRA_SLOTS);
+    psx_mod_write_word(SF_GP + 0xDE8u, psx_mod_read_word(SF_GP + 0xDE8u) + SF_EXTRA_SLOTS);
+}
+
+static int sf_row_has(const uint8_t* ids, int n, uint8_t id) {
+    for (int i = 0; i < n; i++) if (ids[i] == id) return 1;
+    return 0;
+}
+
+/* Splits an original row into its load and unload parts. */
+static void sf_row_parts(const uint8_t* row, uint8_t* load, int* nload, uint8_t* unload, int* nunload) {
+    int unloading = 0;
+    *nload = *nunload = 0;
+    for (int i = 0; i < SF_ROOM_LOAD_MAX; i++) {
+        const uint8_t id = row[i];
+        if (id == 0xFFu) break;
+        if (id == 0xFEu) { unloading = 1; continue; }
+        if (unloading) unload[(*nunload)++] = id;
+        else load[(*nload)++] = id;
+    }
+}
+
+/* Widens every room's row once per level: its own rooms first, then the rooms
+ * its neighbours load, most shared first, never a room it must unload. */
+static void sf_widen_room_lists(void) {
+    const uint32_t level = psx_mod_read_word(SF_LEVEL_DATA);
+    const int32_t rooms = (int32_t)psx_mod_read_word(SF_GP + 0xD48u);
+    if (!level || (level & 0x1FFFFFFFu) >= 0x200000u || rooms <= 0 || rooms > SF_MAX_ROOMS)
+        return;
+    const uint32_t rows = level + SF_ROOM_LISTS;
+    if (level == sf_rooms_level) {
+        /* Rows still as widened: nothing to do. Anything else means the game
+         * reloaded the level data, so its rows are the originals again. */
+        int widened = 1;
+        for (int i = 0; i < rooms * SF_ROOM_ROW && widened; i++)
+            widened = psx_mod_read_byte(rows + (uint32_t)i) == sf_rooms_wide[i];
+        if (widened) return;
+    }
+    for (int i = 0; i < rooms * SF_ROOM_ROW; i++)
+        sf_rooms_orig[i] = psx_mod_read_byte(rows + (uint32_t)i);
+    sf_rooms_level = level;
+    for (int r = 0; r < rooms; r++) {
+        uint8_t load[SF_ROOM_LOAD_MAX], unload[SF_ROOM_LOAD_MAX];
+        int nload, nunload;
+        sf_row_parts(&sf_rooms_orig[r * SF_ROOM_ROW], load, &nload, unload, &nunload);
+        uint8_t cand[SF_MAX_ROOMS];
+        int votes[SF_MAX_ROOMS] = {0};
+        int ncand = 0;
+        for (int n = 0; n < nload; n++) {
+            if (load[n] >= rooms) continue;
+            uint8_t nl[SF_ROOM_LOAD_MAX], nu[SF_ROOM_LOAD_MAX];
+            int nnl, nnu;
+            sf_row_parts(&sf_rooms_orig[load[n] * SF_ROOM_ROW], nl, &nnl, nu, &nnu);
+            for (int k = 0; k < nnl; k++) {
+                const uint8_t id = nl[k];
+                if (id == r || id >= rooms || sf_row_has(load, nload, id) ||
+                    sf_row_has(unload, nunload, id))
+                    continue;
+                if (!votes[id]) cand[ncand++] = id;
+                votes[id]++;
+            }
+        }
+        int room_left = SF_ROOM_LOAD_MAX - nload - (nunload ? nunload + 1 : 0);
+        uint8_t out[SF_ROOM_ROW];
+        int o = 0;
+        for (int i = 0; i < nload; i++) out[o++] = load[i];
+        while (room_left > 0 && ncand > 0) {
+            int best = 0;
+            for (int i = 1; i < ncand; i++) if (votes[cand[i]] > votes[cand[best]]) best = i;
+            out[o++] = cand[best];
+            cand[best] = cand[--ncand];
+            room_left--;
+        }
+        if (nunload) {
+            out[o++] = 0xFEu;
+            for (int i = 0; i < nunload; i++) out[o++] = unload[i];
+        }
+        while (o < SF_ROOM_ROW) out[o++] = 0xFFu;
+        for (int i = 0; i < SF_ROOM_ROW; i++) {
+            sf_rooms_wide[r * SF_ROOM_ROW + i] = out[i];
+            psx_mod_write_byte(rows + (uint32_t)(r * SF_ROOM_ROW + i), out[i]);
+        }
+    }
+}
+
+static void sf_room_manager(struct CPUState* cpu, uint32_t address) {
+    (void)cpu; (void)address;
+    if (!sf_enabled || sf_off_rooms || !sf_expanded_ram() || psx_mod_widescreen_x_margin() <= 0) return;
+    sf_extend_slot_pool();
+    sf_widen_room_lists();
+}
+
 PSX_MOD_CONSTRUCTOR(sf_register_widescreen_plugin) {
+    (void)psx_mod_register_activation_plugin("sf.widescreen", sf_widescreen_activate);
     (void)psx_mod_register_instruction_plugin("sf.widescreen", SF_WORLD_BLOCK_TEST,
                                               0x48098800u, sf_world_block_test);
     (void)psx_mod_register_instruction_plugin("sf.widescreen", SF_WORLD_PIECE_TEST,
                                               0x14400018u, sf_world_piece_test);
-    (void)psx_mod_register_activation_plugin("sf.widescreen", sf_widescreen_activate);
+    (void)psx_mod_register_instruction_plugin("sf.widescreen", SF_WORLD_CLIP_LIMIT,
+                                              0xAC6A03A0u, sf_world_clip_limit);
+    (void)psx_mod_register_instruction_plugin("sf.widescreen", SF_ROOM_MANAGER,
+                                              0x27BDFEE0u, sf_room_manager);
     (void)psx_mod_register_vblank_plugin("sf.widescreen", sf_widescreen_vblank);
     (void)psx_mod_register_instruction_plugin("sf.widescreen", SF_SORT_SPRITE_DONE,
                                               0x24E70018u, sf_sort_sprite_done);
