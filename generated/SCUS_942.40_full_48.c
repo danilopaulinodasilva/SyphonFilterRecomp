@@ -21086,6 +21086,7 @@ block_800C8704:
 #ifdef PSX_ENABLE_BLOCK_CYCLES
     psx_icache_fetch(cpu, 0x800C8704u);
 #endif
+psx_mod_instruction(cpu, 0x800C8704u, 0x96420006u);
     { uint32_t _pgxa = cpu->gpr[18] + 6; cpu->gpr[2] = psx_cyc_load_half(cpu, cpu->gpr[18] + 6, 2, 0x40000u);
     PGXP_LOAD(0x96420006u, _pgxa, cpu->gpr[2]); }  /* 0x800C8704: 0x96420006 */
 #ifdef PSX_COSIM
@@ -23167,6 +23168,7 @@ block_800C8988:
 #ifdef PSX_ENABLE_BLOCK_CYCLES
     psx_cyc_step(cpu, 0x80004u);
 #endif
+psx_mod_instruction(cpu, 0x800C8988u, 0x00131080u);
     { uint32_t _pgx1 = cpu->gpr[19]; cpu->gpr[2] = cpu->gpr[19] << 2;
     PGXP_ALU(0x00131080u, cpu->gpr[2], _pgx1, 2u); }  /* 0x800C8988: 0x00131080 */
 #ifdef PSX_COSIM

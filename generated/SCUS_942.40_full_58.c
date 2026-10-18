@@ -30772,6 +30772,7 @@ block_800E817C:
 #ifdef PSX_ENABLE_BLOCK_CYCLES
     psx_cyc_step(cpu, 0x9u);
 #endif
+psx_mod_instruction(cpu, 0x800E81A8u, 0xA0600003u);
     { uint32_t _pgxa = cpu->gpr[3] + 3; g_debug_last_store_pc = 0x800E81A8u; psx_store_cycle_barrier(); cpu->write_byte(cpu->gpr[3] + 3, (uint8_t)cpu->gpr[0]);
     PGXP_STORE(0xA0600003u, _pgxa, cpu->gpr[0]); }  /* 0x800E81A8: 0xA0600003 */
 #ifdef PSX_COSIM
@@ -35322,6 +35323,7 @@ block_800E87EC:
 #ifdef PSX_ENABLE_BLOCK_CYCLES
     psx_cyc_step(cpu, 0x80u);
 #endif
+psx_mod_instruction(cpu, 0x800E8918u, 0x24E70018u);
     { uint32_t _pgx1 = cpu->gpr[7]; cpu->gpr[7] = cpu->gpr[7] + 24;
     PGXP_ALU(0x24E70018u, cpu->gpr[7], _pgx1, 0x00000018u); }  /* 0x800E8918: 0x24E70018 */
 #ifdef PSX_COSIM
