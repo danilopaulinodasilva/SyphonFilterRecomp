@@ -38,6 +38,8 @@ strict = true
 window_title = "SyphonFilter Recompiled"
 memcard_dir = "saves"
 overlay_cache = true
+# Syphon Filter's FMV start task polls CdSync for a plain 0x02 status after SeekL.
+cd_seek_sets_read = false
 
 [video]
 renderer = "opengl"
