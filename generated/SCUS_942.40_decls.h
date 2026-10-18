@@ -2220,6 +2220,7 @@ void func_800D59CC(CPUState* cpu);
 void func_800D5B50(CPUState* cpu);
 void func_800D690C(CPUState* cpu);
 void func_800D6950(CPUState* cpu);
+void func_800D6960(CPUState* cpu);
 void func_800D69D8(CPUState* cpu);
 void func_800D6B04(CPUState* cpu);
 void func_800D6C14(CPUState* cpu);

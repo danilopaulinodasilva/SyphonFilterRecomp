@@ -34316,7 +34316,7 @@ block_80077BBC:
 #ifdef PSX_ENABLE_BLOCK_CYCLES
     psx_cyc_step(cpu, 0x1u);
 #endif
-    /* nop */  /* 0x80077BC0: 0x00000000 */
+cpu->gpr[5] = cpu->gpr[5] + psx_ws_x_margin();  /* ws cull a1 bias */  /* 0x80077BC0: 0x00000000 */
 #ifdef PSX_COSIM
     cosim_instr(0x80077BC0u);
 #endif

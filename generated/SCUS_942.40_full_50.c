@@ -27524,7 +27524,7 @@ block_800CF0A4:
 #ifdef PSX_ENABLE_BLOCK_CYCLES
     psx_cyc_step(cpu, 0x1u);
 #endif
-    /* nop */  /* 0x800CF0A8: 0x00000000 */
+cpu->gpr[5] = cpu->gpr[5] + psx_ws_x_margin();  /* ws cull a1 bias */  /* 0x800CF0A8: 0x00000000 */
 #ifdef PSX_COSIM
     cosim_instr(0x800CF0A8u);
 #endif
