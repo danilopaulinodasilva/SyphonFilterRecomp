@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -237,7 +238,141 @@ static void sf_widescreen_activate(void) {
     if (diag && *diag && !sf_hud_diag) sf_hud_diag = fopen(diag, "w");
 }
 
+/*
+ * World block cull (0x800D40A4). Each world block is a box; the game projects
+ * four corners of its mid-height rectangle and keeps the block only when one
+ * corner lies in front of the camera, within the draw distance, and inside
+ * |SX| <= a1 (a1 already carries the wide margin, [widescreen.cull] a1_sites).
+ * A long block beside the camera can have every corner behind the camera or
+ * past the draw distance while its sides cross the view: the 4:3 view never
+ * showed those, the wide margins do (black gaps at the screen edges). Before
+ * the first corner test this redoes the test properly -- the rectangle clipped
+ * to the depth range, then projected -- and, when it overlaps the wide view,
+ * makes corner 0 pass so the game's own accept path draws the block.
+ */
+#define SF_WORLD_BLOCK_TEST 0x800D43F4u /* mfc2 t1,SZ1 (corner 0) */
+#define SF_WORLD_PIECE_TEST 0x800D35D0u /* bnez v0 after the piece centre test */
+#define SF_DRAW_DISTANCE    0x80116454u
+#define SF_NEAR_Z 16
+#define SF_PIECE_GUARD 32
+#define SF_MAX_PIECE_BLOCKS 256
+
+extern int psx_ws_x_margin(void);
+
+typedef struct { int32_t x, z; } SfCamPt;
+
+static void sf_cam_point(const struct CPUState* cpu, int vx, int vy, int vz, SfCamPt* out) {
+    const uint32_t* c = cpu->gte_ctrl;
+    const int r11 = s16(c[0]), r12 = (int16_t)(c[0] >> 16), r13 = s16(c[1]);
+    const int r31 = s16(c[3]), r32 = (int16_t)(c[3] >> 16), r33 = s16(c[4]);
+    out->x = (int32_t)(((int64_t)r11 * vx + (int64_t)r12 * vy + (int64_t)r13 * vz) >> 12) + (int32_t)c[5];
+    out->z = (int32_t)(((int64_t)r31 * vx + (int64_t)r32 * vy + (int64_t)r33 * vz) >> 12) + (int32_t)c[7];
+}
+
+/* Clips the polygon to z >= lo (keep_above) or z <= hi; returns the new count. */
+static int sf_clip_z(const SfCamPt* in, int n, SfCamPt* out, int32_t plane, int keep_above) {
+    int m = 0;
+    for (int i = 0; i < n; i++) {
+        const SfCamPt a = in[i], b = in[(i + 1) % n];
+        const int ina = keep_above ? a.z >= plane : a.z <= plane;
+        const int inb = keep_above ? b.z >= plane : b.z <= plane;
+        if (ina) out[m++] = a;
+        if (ina != inb) {
+            const int64_t t_num = (int64_t)(plane - a.z), t_den = (int64_t)(b.z - a.z);
+            out[m].x = a.x + (int32_t)(((int64_t)(b.x - a.x) * t_num) / t_den);
+            out[m].z = plane;
+            m++;
+        }
+    }
+    return m;
+}
+
+/* Whether a block's mid-height rectangle, clipped to near..far_z, projects
+ * inside |SX| <= bound with the current GTE camera (rotation, translation, H). */
+static int sf_rect_visible(const struct CPUState* cpu, int32_t x0, int32_t z0, int32_t x1,
+                           int32_t z1, int32_t y, int32_t bound, int32_t far_z) {
+    const int32_t h = (int32_t)(cpu->gte_ctrl[26] & 0xFFFFu);
+    if (bound <= 0 || far_z <= SF_NEAR_Z || h <= 0) return 0;
+    SfCamPt quad[4], a[8], b[12];
+    sf_cam_point(cpu, x0, y, z0, &quad[0]);
+    sf_cam_point(cpu, x0, y, z1, &quad[1]);
+    sf_cam_point(cpu, x1, y, z1, &quad[2]);
+    sf_cam_point(cpu, x1, y, z0, &quad[3]);
+    int n = sf_clip_z(quad, 4, a, SF_NEAR_Z, 1);
+    if (n < 3) return 0;
+    n = sf_clip_z(a, n, b, far_z, 0);
+    if (n < 3) return 0;
+    int64_t lo = INT64_MAX, hi = INT64_MIN;
+    for (int i = 0; i < n; i++) {
+        const int64_t sx = (int64_t)h * b[i].x / b[i].z;
+        if (sx < lo) lo = sx;
+        if (sx > hi) hi = sx;
+    }
+    return lo <= bound && hi >= -bound;
+}
+
+/* The block test's draw distance (0x800D42B0): 1.375 x the level's. */
+static int32_t sf_block_far(void) {
+    uint32_t far_z = psx_mod_read_word(SF_DRAW_DISTANCE);
+    return (int32_t)(far_z + (far_z >> 2) + (far_z >> 3));
+}
+
+static void sf_world_block_test(struct CPUState* cpu, uint32_t address) {
+    (void)address;
+    if (!sf_enabled || psx_ws_x_margin() <= 0) return;
+    const int32_t x0 = s16(cpu->gpr[20]), z0 = s16(cpu->gpr[21]);   /* s4, s5 */
+    const int32_t x1 = s16(cpu->gpr[22]), z1 = s16(cpu->gpr[23]);   /* s6, s7 */
+    const int32_t y = (int16_t)(cpu->gpr[15] >> 16);                  /* t7 */
+    if (!sf_rect_visible(cpu, x0, z0, x1, z1, y, (int32_t)cpu->gpr[5] /* a1 */,
+                         (int32_t)cpu->gpr[25] /* t9 */))
+        return;
+    psx_mod_counter_add("sf.block_kept", 1);
+    cpu->gte_data[17] = 1;   /* SZ1: in front, within the draw distance */
+    cpu->gte_data[12] = 0;   /* SXY0: on the screen centre line */
+}
+
+/*
+ * World piece cull (0x800D3100). Each piece (a building, a stretch of street)
+ * owns a list of blocks; the game first projects the piece's centre only
+ * (0x800D1898: in front, nearer than 0x1F40, |SX| < 0xC8 + margin) and skips
+ * the whole piece otherwise. A large piece beside the camera has its centre
+ * behind it while its blocks cross the wide margins. When that test rejects,
+ * this checks the piece's blocks as above and keeps the piece if one shows.
+ */
+static void sf_world_piece_test(struct CPUState* cpu, uint32_t address) {
+    (void)address;
+    if (!sf_enabled || cpu->gpr[2] != 0) return;          /* v0: centre test result */
+    psx_mod_counter_add("sf.piece_rejected", 1);
+    const int margin = psx_ws_x_margin();
+    if (margin <= 0) return;
+    const uint32_t piece = cpu->gpr[17];                     /* s1 */
+    const uint32_t owner = cpu->gpr[18];                     /* s2 */
+    const uint32_t list = psx_mod_read_word(piece + ((psx_mod_read_word(owner + 8u) >> 16 & 4u) ? 0x24u : 0x20u));
+    if ((list & 0x1FFFFFFFu) >= 0x00800000u || !list) return;
+    const int32_t bound = 160 + margin + SF_PIECE_GUARD;
+    const int32_t far_z = sf_block_far();
+    for (int i = 1; i <= SF_MAX_PIECE_BLOCKS; i++) {
+        const uint32_t block = psx_mod_read_word(list + 4u * (uint32_t)i);
+        if (block == 0xFFFFFFFFu || (block & 0x1FFFFFFFu) >= 0x00800000u || !block) return;
+        const int32_t y_lo = (int16_t)psx_mod_read_half(block + 0x10u);
+        const int32_t y_hi = (int16_t)psx_mod_read_half(block + 0x12u);
+        if (sf_rect_visible(cpu, (int16_t)psx_mod_read_half(block + 8u),
+                            (int16_t)psx_mod_read_half(block + 0xAu),
+                            (int16_t)psx_mod_read_half(block + 0xCu),
+                            (int16_t)psx_mod_read_half(block + 0xEu),
+                            y_hi - ((y_hi - y_lo) >> 1), bound, far_z)) {
+            psx_mod_counter_add("sf.piece_rescued", 1);
+            cpu->gpr[2] = 1;
+            return;
+        }
+    }
+}
+
 PSX_MOD_CONSTRUCTOR(sf_register_widescreen_plugin) {
+    (void)psx_mod_register_instruction_plugin("sf.widescreen", SF_WORLD_BLOCK_TEST,
+                                              0x48098800u, sf_world_block_test);
+    (void)psx_mod_register_instruction_plugin("sf.widescreen", SF_WORLD_PIECE_TEST,
+                                              0x14400018u, sf_world_piece_test);
     (void)psx_mod_register_activation_plugin("sf.widescreen", sf_widescreen_activate);
     (void)psx_mod_register_vblank_plugin("sf.widescreen", sf_widescreen_vblank);
     (void)psx_mod_register_instruction_plugin("sf.widescreen", SF_SORT_SPRITE_DONE,
