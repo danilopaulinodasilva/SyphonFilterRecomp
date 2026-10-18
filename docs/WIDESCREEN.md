@@ -20,6 +20,17 @@ recentres), so its visibility tests compare `|SX|` against a bound.
 
 The world mesh renderer (0x800CF0E4) has no per-polygon screen test.
 
+The world block renderer (0x800D40A4) also flags every vertex whose `|SX|`
+exceeds `H * 0xC0 / 0x26` (stored at 0x1F8003A0) and drops polygons by those
+flags. That limit was the cause of the black wedges at the wide edges (near
+walls, street corners, the Georgia Street opening flyover). The plugin widens
+it by the cull margin where it is stored (`sw t2,0x3A0(v1)` at 0x800D41F8).
+
+Investigated and not needed after that fix (kept on branch `wip/world-cull`):
+re-testing world blocks and pieces with a clipped box, and widening the
+room streaming (rooms load by a precomputed per-room visibility list into a
+21-slot pool; widening it needs 8 MB RAM for extra slots).
+
 Verification: during the attract demo the cull margin was toggled live
 (margin 0 vs the 16:9 margin) frame by frame; no object popped at the edges.
 The usual object bound (400 px from centre) already exceeds the 16:9 (213)
@@ -51,10 +62,9 @@ GPU frames. `SF_HUD_DIAG=<file>` logs every grouping decision.
   (e.g. boss bars, mission timers, special weapon UIs) that need checking.
 - The clock sits at the very left edge in wide mode (same inset it has from
   the 4:3 edge); it may look tight on screens that crop.
-- Some in-engine cutscenes show dark areas at the far edges (top-left,
-  far right). With the culling A/B clean, these are most likely night sky /
-  the end of the authored geometry, not culling; worth a look in daylight
-  levels.
+- Black wedges at the edges were the vertex clip limit above (fixed).
+  Verified at Georgia Street (opening flyover, start area, a walk down the
+  street, a full turn); other levels still need a look.
 - Gameplay past the first mission is untested with widescreen.
 - The cull sites and the `mflo a1` codegen support depend on the
   `danilopaulinodasilva/psxrecomp` fork (branch `syphon-filter`).

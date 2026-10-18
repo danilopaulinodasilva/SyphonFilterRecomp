@@ -237,8 +237,29 @@ static void sf_widescreen_activate(void) {
     if (diag && *diag && !sf_hud_diag) sf_hud_diag = fopen(diag, "w");
 }
 
+/*
+ * World vertex clip flags (0x800D40A4). The block renderer marks each vertex
+ * whose |SX| exceeds a screen limit (H * 0xC0 / 0x26, kept at 0x1F8003A0) and
+ * later drops polygons by those marks: near walls at the wide edges vanished.
+ * Widen the limit by the wide margin when it is stored.
+ */
+#define SF_WORLD_CLIP_LIMIT 0x800D41F8u /* sw t2,0x3A0(v1): t2 = y limit << 16 | x limit */
+
+static void sf_world_clip_limit(struct CPUState* cpu, uint32_t address) {
+    (void)address;
+    if (!sf_enabled) return;
+    const int32_t margin = psx_mod_widescreen_x_margin();
+    if (margin <= 0) return;
+    const uint32_t t2 = cpu->gpr[10];
+    int32_t x = (int32_t)(t2 & 0xFFFFu) + margin;
+    if (x > 0x7FFF) x = 0x7FFF;
+    cpu->gpr[10] = (t2 & 0xFFFF0000u) | (uint32_t)x;
+}
+
 PSX_MOD_CONSTRUCTOR(sf_register_widescreen_plugin) {
     (void)psx_mod_register_activation_plugin("sf.widescreen", sf_widescreen_activate);
+    (void)psx_mod_register_instruction_plugin("sf.widescreen", SF_WORLD_CLIP_LIMIT,
+                                              0xAC6A03A0u, sf_world_clip_limit);
     (void)psx_mod_register_vblank_plugin("sf.widescreen", sf_widescreen_vblank);
     (void)psx_mod_register_instruction_plugin("sf.widescreen", SF_SORT_SPRITE_DONE,
                                               0x24E70018u, sf_sort_sprite_done);

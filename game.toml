@@ -31,8 +31,9 @@ known_crc32 = [
 
 [recompiler]
 seeds = "seeds/ghidra_funcs.txt"
-# libgs packet-complete points hooked by the widescreen HUD plugin.
-mod_instruction_sites = ["0x800E8918", "0x800E81A8", "0x800C8704", "0x800C8988"]
+# Widescreen plugin hooks: the world renderer's vertex clip limit (0x800D41F8)
+# and the libgs packet-complete points used to anchor the HUD.
+mod_instruction_sites = ["0x800D41F8", "0x800E8918", "0x800E81A8", "0x800C8704", "0x800C8988"]
 out_dir = "generated"
 strict = true
 
