@@ -41,15 +41,4 @@ label = "Adaptive"
 
 [[plugin]]
 feature = "widescreen"
-id = "sf.widescreen.16-9"
-when = { aspect = "16:9" }
-
-[[plugin]]
-feature = "widescreen"
-id = "sf.widescreen.21-9"
-when = { aspect = "21:9" }
-
-[[plugin]]
-feature = "widescreen"
-id = "sf.widescreen.adaptive"
-when = { aspect = "adaptive" }
+id = "sf.widescreen"
