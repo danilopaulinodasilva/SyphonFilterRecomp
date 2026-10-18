@@ -1,0 +1,31 @@
+{
+  "cue_path": "/Users/danilopaulinodasilva/psx-recomp/roms/syphon-filter/Syphon Filter (USA).cue",
+  "cue_name": "Syphon Filter (USA).cue",
+  "bin_name": "Syphon Filter (USA).bin",
+  "track_count": 1,
+  "data_track_size": 733243056,
+  "data_track_md5": "864d927e9eb35ef485ae1d2aba510459",
+  "data_track_sha1": "a1e63eab8bb877e85f54267220adb763a727d6d9",
+  "data_track_crc32": "b663e90e",
+  "boot_exe": "SCUS_942.40",
+  "serial": "SCUS-94240",
+  "serial_exe": "SCUS_942.40",
+  "volume_id": "SCUS94240",
+  "display_name": "SyphonFilter",
+  "load_address": "0x80010000",
+  "entry_pc": "0x800E3DA4",
+  "text_size": "0x001B7000",
+  "stack_base": "0x801FFFF0",
+  "require_cue": true,
+  "required_disc_fp": "23fbbe0b6187153867d4aa4c8ff651aaff8b92ba42c4b83a64142ba947a4e7b3",
+  "boot_exe_sha256": "bac292061ad5bc718ce137ef5b43d3d7e9b1b65248fb0d52229f328ccfe4ab4e",
+  "seed_count": 1757,
+  "warnings": [
+    "cue has only 1 TRACK \u2014 Track-01-only dumps fail multi-track netplay/catalog gates; prefer a full Redump cue."
+  ],
+  "notes": [
+    "entry_pc/load_address/text_size/stack_base taken from PS-X EXE header.",
+    "seeds are first-pass boot-EXE JAL targets (+ entry); expect to grow as overlays / runtime paths are discovered.",
+    "required_disc_fp is psxrecomp-toc-v1 (matches runtime DiscIdentity)."
+  ]
+}

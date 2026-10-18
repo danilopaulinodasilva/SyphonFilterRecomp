@@ -1,0 +1,13 @@
+{
+  "$schema": "https://recomp.fyi/schema/v1.json",
+  "game": "SyphonFilter",
+  "system": "PS1",
+  "type": "recomp",
+  "toolchain": "psxrecomp",
+  "status": "exploring",
+  "project": "SyphonFilterRecomp",
+  "original": {
+    "region": "USA",
+    "serial": "SCUS-94240"
+  }
+}
