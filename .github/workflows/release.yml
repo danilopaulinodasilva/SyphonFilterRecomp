@@ -56,4 +56,4 @@ jobs:
         run: |
           gh release create "${GITHUB_REF_NAME}" "dist/SyphonFilterRecomp-${GITHUB_REF_NAME}-source.zip" \
             --title "Syphon Filter Recompiled ${GITHUB_REF_NAME}" \
-            --notes-file notes.md --prerelease
+            --notes-file notes.md
