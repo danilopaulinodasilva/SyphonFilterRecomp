@@ -31,6 +31,9 @@ known_crc32 = [
 
 [recompiler]
 seeds = "seeds/ghidra_funcs.txt"
+# Widescreen plugin hooks: the world renderer's vertex clip limit (0x800D41F8)
+# and the libgs packet-complete points used to anchor the HUD.
+mod_instruction_sites = ["0x800D41F8", "0x800E8918", "0x800E81A8", "0x800C8704", "0x800C8988"]
 out_dir = "generated"
 strict = true
 
@@ -54,3 +57,32 @@ default_mode = "digital"
 require_cue = true
 required_tracks = 1
 required_disc_fp = "23fbbe0b6187153867d4aa4c8ff651aaff8b92ba42c4b83a64142ba947a4e7b3"
+
+[widescreen]
+# Widescreen activation belongs to the sf.enhancement.widescreen mod package.
+offer = false
+offer_ultrawide = true
+adaptive_view = true
+# Native-wide: render the wider field of view into a wider target instead of
+# squashing the GTE projection and stretching the 320px frame.
+native_wide = true
+# Syphon Filter is fully 3D: gameplay frames are detected by GTE activity.
+# Full-2D screens (menus, FMVs) keep their 4:3 pillarbox.
+gte_game_mode = true
+
+[widescreen.cull]
+# Widen the GTE render funnel's screen-extent rejects (320x240 signatures).
+auto_screen_x = true
+# Object visibility tests reject a model when its projected centre lies past
+# |SX| >= a1 (screen X is centred: OFX = 0, the GPU draw offset recentres).
+# Widen the bound by the live reveal margin. Load-delay nops after the SXY2
+# read in the four copies of the test, and the in-place bound of the model
+# bounding-box test (mflo a1 in 0x800D40A4).
+a1_sites = ["0x800CF0A8", "0x80077BC0", "0x800D18D4", "0x800D699C",
+            "0x800D4230"]
+# Near-camera terrain polygons are dropped when vertex 0 has |SX| >= 0xC3.
+slti_sites = ["0x800D1FD0", "0x800D272C"]
+# Model polygon guard band: polygons whose X extent leaves [-0xC0, 0xC0] are
+# routed to the near/large-polygon path, which drops most of them.
+bias_sites = ["0x800D5990"]
+bias_lower_sites = ["0x800D5988"]

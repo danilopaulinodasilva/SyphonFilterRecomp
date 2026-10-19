@@ -4,5 +4,5 @@
 	branch = syphon-filter
 [submodule "recomp-ui"]
 	path = recomp-ui
-	url = https://github.com/RetroPortingToolKit/recomp-ui.git
-	branch = master
+	url = https://github.com/danilopaulinodasilva/recomp-ui.git
+	branch = feat/psx-menu-title-items
