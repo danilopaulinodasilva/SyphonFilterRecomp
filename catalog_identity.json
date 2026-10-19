@@ -6,7 +6,7 @@
     "boot_exe": "SCUS_942.40"
   },
   "marketing": {
-    "description": "",
+    "description": "Syphon Filter (1999) statically recompiled to native code on psxrecomp, with native widescreen (16:9, 21:9, adaptive), a HUD anchored to the wide edges and an in-game menu. Source only: bring your own disc.",
     "publisher": "Danilo P. da Silva",
     "year": "2026",
     "region": "USA",
